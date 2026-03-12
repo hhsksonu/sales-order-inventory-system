@@ -33,7 +33,7 @@ class OrderItemSerializers(serializers.ModelSerializer):
         fields = ['id', 'product', 'product_name', 'quantity', 'unit_price', 'line_total']
         read_only_fields = ['line_total']
 
-class orderSerializers(serializers.ModelSerializer):
+class OrderSerializers(serializers.ModelSerializer):
     #all item inside the order
     items = OrderItemSerializers(many=True)
     #dealer name in response
