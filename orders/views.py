@@ -1,22 +1,23 @@
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from rest_framework import status
 from .models import Product, Inventory, Order, Dealer
-from .serializers import ProductSerializers, InventorySerializers, DealerSerializers, OrderSerializers
+from .serializers import ProductSerializer, InventorySerializer, DealerSerializer, OrderSerializer
 from django.db import transaction
-
+from django.db.models import ProtectedError
 
 #product views
 
 class ProductListView(APIView):
     def get(self, request):
         products = Product.objects.all()
-        serializer = ProductSerializers(products, many=True)
+        serializer = ProductSerializer(products, many=True)
         return Response(serializer.data)
     
     def post(self, request):
-        serializer = ProductSerializers(data=request.data)
+        serializer = ProductSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -26,12 +27,12 @@ class ProductListView(APIView):
 class ProductDetailView(APIView):
     def get(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
-        serializer = ProductSerializers(product)
+        serializer = ProductSerializer(product)
         return Response(serializer.data)
     
     def put(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
-        serializer = ProductSerializers(product, data=request.data)
+        serializer = ProductSerializer(product, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -39,19 +40,27 @@ class ProductDetailView(APIView):
     
     def delete(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
-        product.delete()
-        return Response({"message": "Product deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        try:
+            product.delete()
+            return Response({"message": "Product deleted successfully."}, 
+            status=status.HTTP_204_NO_CONTENT
+            )
+        except ProtectedError:
+            return Response(
+                {"error": "Cannot delete this product because it has existing orders."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 #dealer view
 class DealerListView(APIView):
     def get(self, request):
         dealers = Dealer.objects.all()
-        serializer = DealerSerializers(dealers, many=True)
+        serializer = DealerSerializer(dealers, many=True)
         return Response(serializer.data)
     
     def post(self, request):
-        serializer = DealerSerializers(data=request.data)
+        serializer = DealerSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -61,22 +70,34 @@ class DealerListView(APIView):
 class DealerDetailView(APIView):
     def get(self, request, pk):
         dealer = get_object_or_404(Dealer, pk=pk)
-        serializer = DealerSerializers(dealer)
+        serializer = DealerSerializer(dealer)
         return Response(serializer.data)
     
     def put(self, request, pk):
         dealer = get_object_or_404(Dealer, pk=pk)
-        serializer = DealerSerializers(dealer, data=request.data)
+        serializer = DealerSerializer(dealer, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    def delete(self, request, pk):
+        dealer = get_object_or_404(Dealer, pk=pk)
+        try:
+            dealer.delete()
+            return Response({"message": "Dealer deleted successfully."})
+        except Exception:
+            #if dealer has orders, PROTECT will block deletion
+            return Response(
+                {"error": "Cannot delete dealer with existing orders."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
 
 class InventoryListView(APIView):
     def get(self, request):
         inventory = Inventory.objects.select_related('product').all()
-        serializer = InventorySerializers(inventory, many=True)
+        serializer = InventorySerializer(inventory, many=True)
         return Response(serializer.data)
     
 
@@ -84,7 +105,9 @@ class InventoryDetailView(APIView):
     def put(self, request, product_id):
         #get inventory by product id
         inventory = get_object_or_404(Inventory, product_id=product_id)
-        serializer = InventorySerializers(inventory, data=request.data, partial=True)
+        data = {'quantity': request.data.get('quantity', inventory.quantity)}
+
+        serializer = InventorySerializer(inventory, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -106,11 +129,11 @@ class OrderListView(APIView):
         if dealer_id:
             orders = orders.filter(dealer_id=dealer_id)
 
-        serializer = OrderSerializers(orders, many=True)
+        serializer = OrderSerializer(orders, many=True)
         return Response(serializer.data)
     
     def post(self, request):
-        serializer = OrderSerializers(data=request.data)
+        serializer = OrderSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -120,20 +143,20 @@ class OrderListView(APIView):
 class OrderDetailView(APIView):
     def get(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
-        serializer = OrderSerializers(order)
+        serializer = OrderSerializer(order)
         return Response(serializer.data)
 
     def put(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
         
-        #block editing confiremd or delivered orders at view level too
+        #block editing confirmed or delivered orders at view level too
         if order.status in ['Confirmed', 'Delivered']:
             return Response(
                 {"error": f"Cannot edit an order with status '{order.status}'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        serializer = OrderSerializers(order, data=request.data)
+        serializer = OrderSerializer(order, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -166,11 +189,12 @@ class OrderConfirmView(APIView):
                     try:
                         inventory = Inventory.objects.select_for_update().get(product=item.product)
                     except Inventory.DoesNotExist:
-                        raise Exception(f"No inventory record found for product '{item.product.name}'.")
+                        raise ValidationError(
+                            f"No inventory record found for product '{item.product.name}'.")
                     
                     #check if enough stock is available
                     if inventory.quantity < item.quantity:
-                        raise Exception(
+                        raise ValidationError(
                             f"Not enough stock for '{item.product.name}'."
                             f"Available: {inventory.quantity}, Required: {item.quantity}."
                         )
@@ -182,8 +206,8 @@ class OrderConfirmView(APIView):
                 order.status = 'Confirmed'
                 order.save()
 
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValidationError as e:
+            return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response({"message": "Order confirmed successfully."})
     

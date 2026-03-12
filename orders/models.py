@@ -35,34 +35,48 @@ class Dealer(models.Model):
 
     def __str__(self):
         return self.name
-    
+
+class OrderCounter(models.Model):
+    date = models.DateField(unique=True)
+    count = models.PositiveIntegerField(default=0)
+
+    def __str__(self):
+        return f"{self.date} - {self.count}"    
 
 class Order(models.Model):
     STATUS_CHOICES = [
         ('Draft', 'Draft'),
         ('Confirmed', 'Confirmed'),
-        ('Delevired', 'Delivered'),
+        ('Delivered', 'Delivered'),
     ]
     order_number = models.CharField(max_length=50, unique=True, blank=True, db_index=True)
     dealer = models.ForeignKey(Dealer, on_delete=models.PROTECT, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default= 'Draft')
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.order_number
+        return self.order_number or "Order"
     
     #auto generator order number like ORD-20250101-0001
     def save(self, *args, **kwargs):
         if not self.order_number:
-            today = timezone.now().strptime('%Y%m%d')
-            #count total order and add 1
-            todays_orders = Order.objects.filter(created_at__date=timezone.now().date()).count()
-            sequence = todays_orders + 1
-            self.order_number = f"ORD-{today}-{str(sequence).zfill(4)}"
-        super().save(*args, **kwargs)
+            from django.db import transaction
+            today = timezone.now().date()
 
+            with transaction.atomic():
+                # lock this row so no other request can read it simultaneously
+                counter, created = OrderCounter.objects.select_for_update().get_or_create(
+                    date=today,
+                    defaults={'count': 0}
+                )
+                counter.count += 1
+                counter.save()
+
+                self.order_number = f"ORD-{today.strftime('%Y%m%d')}-{str(counter.count).zfill(4)}"
+
+        super().save(*args, **kwargs)
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete= models.CASCADE, related_name='items')

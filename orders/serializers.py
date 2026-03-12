@@ -1,12 +1,12 @@
 from rest_framework import serializers
 from .models import Product, Inventory, Dealer, Order, OrderItem
 
-class ProductSerializers(serializers.ModelSerializer):
+class ProductSerializer(serializers.ModelSerializer):
     stock_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ['id', 'sku', 'desciption', 'price', 'created_at', 'updated_at']
+        fields = ['id', 'sku', 'description', 'price', 'stock_quantity', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
     def get_stock_quantity(self, obj):
@@ -16,7 +16,7 @@ class ProductSerializers(serializers.ModelSerializer):
         except:
             return 0
 
-class InventorySerializers(serializers.ModelSerializer):
+class InventorySerializer(serializers.ModelSerializer):
     #showing product name alongside inventory info
     product_name = serializers.CharField(source='product.name', read_only=True)
     
@@ -24,12 +24,6 @@ class InventorySerializers(serializers.ModelSerializer):
         model = Inventory
         fields = ['id', 'product', 'product_name', 'quantity', 'updated_at']
         read_only_fields = ['updated_at']
-
-class DealerSerializers(serializers.ModelSerializer):
-    class Meta:
-        model = Dealer
-        fields = ['id', 'name', 'email', 'phone', 'address', 'created_at']
-        read_only_fields = ['created_at']
 
 
 class OrderSummarySerializer(serializers.ModelSerializer):
@@ -39,25 +33,25 @@ class OrderSummarySerializer(serializers.ModelSerializer):
         fields = ['id', 'order_number', 'status', 'total_amount', 'created_at']
 
 class DealerSerializer(serializers.ModelSerializer):
-    order = OrderSummarySerializer(many=True, read_only= True)
+    orders = OrderSummarySerializer(many=True, read_only= True)
 
     class Meta:
         model = Dealer
         fields = ['id', 'name', 'email', 'phone', 'address', 'orders', 'created_at']
         read_only_fields = ['created_at']
 
-class OrderItemSerializers(serializers.ModelSerializer):
+class OrderItemSerializer(serializers.ModelSerializer):
     #showing product name in response so it will be more readable
-    product_name = serializers.CharField(source='product_name', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
 
     class Meta:
         model = OrderItem
         fields = ['id', 'product', 'product_name', 'quantity', 'unit_price', 'line_total']
         read_only_fields = ['line_total']
 
-class OrderSerializers(serializers.ModelSerializer):
+class OrderSerializer(serializers.ModelSerializer):
     #all item inside the order
-    items = OrderItemSerializers(many=True)
+    items = OrderItemSerializer(many=True)
     #dealer name in response
     dealer_name = serializers.CharField(source='dealer.name', read_only=True)
 
@@ -70,13 +64,13 @@ class OrderSerializers(serializers.ModelSerializer):
         read_only_fields = ['order_number', 'status', 'total_amount', 'created_at', 'updated_at']
 
     
-    def create(self, validate_data):
+    def create(self, validated_data):
         #pulling out items data before creating order
 
-        items_data = validate_data.pop('items')
+        items_data = validated_data.pop('items')
 
         #create the order first
-        order = Order.objects.create(**validate_data)
+        order = Order.objects.create(**validated_data)
 
         #now we create each order item one by one
         for item in items_data:
