@@ -19,4 +19,5 @@ urlpatterns = [
     path('orders/<int:pk>/', views.OrderDetailView.as_view()),
     path('orders/<int:pk>/confirm/', views.OrderConfirmView.as_view()),
     path('orders/<int:pk>/deliver/', views.OrderDeliverView.as_view()),
+    path('orders/<int:pk>/summary/', views.OrderSummaryView.as_view()),
 ]

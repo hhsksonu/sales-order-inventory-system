@@ -1,11 +1,13 @@
 from django.db import models
 from django.utils import timezone
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 # Create your models here.
 
 class Product(models.Model):
     name = models.CharField(max_length=255)
-    sku = models.CharField(max_length=255, unique=True)
+    sku = models.CharField(max_length=100, unique=True, db_index=True)
     description = models.TextField(blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -41,7 +43,7 @@ class Order(models.Model):
         ('Confirmed', 'Confirmed'),
         ('Delevired', 'Delivered'),
     ]
-    order_number = models.CharField(max_length=50, unique=True, blank=True)
+    order_number = models.CharField(max_length=50, unique=True, blank=True, db_index=True)
     dealer = models.ForeignKey(Dealer, on_delete=models.PROTECT, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default= 'Draft')
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
@@ -75,3 +77,9 @@ class OrderItem(models.Model):
     def save(self, *args, **kwargs):
         self.line_total = self.quantity * self.unit_price
         super().save(*args, **kwargs)
+
+#automatically create inventory when a new product is created
+@receiver(post_save, sender=Product)
+def create_inventory_for_product(sender, instance, created, **kwargs):
+    if created:
+        Inventory.objects.create(product=instance, quantity=0)

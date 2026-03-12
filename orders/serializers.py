@@ -2,11 +2,19 @@ from rest_framework import serializers
 from .models import Product, Inventory, Dealer, Order, OrderItem
 
 class ProductSerializers(serializers.ModelSerializer):
+    stock_quantity = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
         fields = ['id', 'sku', 'desciption', 'price', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
+    def get_stock_quantity(self, obj):
+        #return 0 if inventory doesnot exist yet
+        try:
+            return obj.inventory.quantity
+        except:
+            return 0
 
 class InventorySerializers(serializers.ModelSerializer):
     #showing product name alongside inventory info
@@ -23,6 +31,20 @@ class DealerSerializers(serializers.ModelSerializer):
         fields = ['id', 'name', 'email', 'phone', 'address', 'created_at']
         read_only_fields = ['created_at']
 
+
+class OrderSummarySerializer(serializers.ModelSerializer):
+    #summary of order ofr dealer detail view
+    class Meta:
+        model = Order
+        fields = ['id', 'order_number', 'status', 'total_amount', 'created_at']
+
+class DealerSerializer(serializers.ModelSerializer):
+    order = OrderSummarySerializer(many=True, read_only= True)
+
+    class Meta:
+        model = Dealer
+        fields = ['id', 'name', 'email', 'phone', 'address', 'orders', 'created_at']
+        read_only_fields = ['created_at']
 
 class OrderItemSerializers(serializers.ModelSerializer):
     #showing product name in response so it will be more readable

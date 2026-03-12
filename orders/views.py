@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import Product, Inventory, Order, Dealer
 from .serializers import ProductSerializers, InventorySerializers, DealerSerializers, OrderSerializers
+from django.db import transaction
+
 
 #product views
 
@@ -93,6 +95,17 @@ class InventoryDetailView(APIView):
 class OrderListView(APIView):
     def get(self, request):
         orders = Order.objects.prefetch_related('items').all()
+        
+        #filter by status if provided /api/orders/?status=Draft
+        status_filter = request.query_params.get('status', None)
+        if status_filter:
+            orders = orders.filter(status=status_filter)
+
+        #filter by dealer if provided /api/orders/?dealer_id=1
+        dealer_id = request.query_params.get('dealer_id', None)
+        if dealer_id:
+            orders = orders.filter(dealer_id=dealer_id)
+
         serializer = OrderSerializers(orders, many=True)
         return Response(serializer.data)
     
@@ -112,6 +125,14 @@ class OrderDetailView(APIView):
 
     def put(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
+        
+        #block editing confiremd or delivered orders at view level too
+        if order.status in ['Confirmed', 'Delivered']:
+            return Response(
+                {"error": f"Cannot edit an order with status '{order.status}'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         serializer = OrderSerializers(order, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -130,8 +151,40 @@ class OrderConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        order.status = 'Confirmed'
-        order.save()
+        #checking if order has any items
+        if not order.items.exists():
+            return Response(
+                {"error": "Cannot confirm an empty order."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        #if anything fails, nothing get saved
+        try:
+            with transaction.atomic():
+                for item in order.items.all():
+                    #get inventory for this product
+                    try:
+                        inventory = Inventory.objects.select_for_update().get(product=item.product)
+                    except Inventory.DoesNotExist:
+                        raise Exception(f"No inventory record found for product '{item.product.name}'.")
+                    
+                    #check if enough stock is available
+                    if inventory.quantity < item.quantity:
+                        raise Exception(
+                            f"Not enough stock for '{item.product.name}'."
+                            f"Available: {inventory.quantity}, Required: {item.quantity}."
+                        )
+                    
+                    #deduct stock
+                    inventory.quantity -= item.quantity
+                    inventory.save()
+
+                order.status = 'Confirmed'
+                order.save()
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
         return Response({"message": "Order confirmed successfully."})
     
 class OrderDeliverView(APIView):
@@ -148,3 +201,26 @@ class OrderDeliverView(APIView):
         order.status = 'Delivered'
         order.save()
         return Response({"message": "Order marked as delivered successfully."})
+
+class OrderSummaryView(APIView):
+    def get(self, request, pk):
+        order = get_object_or_404(Order, pk=pk)
+        items = order.items.all()
+
+        summary = {
+            "order_number": order.order_number,
+            "dealer": order.dealer.name,
+            "status": order.status,
+            "total_items": items.count(),
+            "items": [
+                {
+                    "product": item.product.name,
+                    "quantity": item.quantity,
+                    "unit_price": item.unit_price,
+                    "line_total": item.line_total
+                }
+                for item in items
+            ],
+            "created_at": order.created_at,
+        }
+        return Response(summary)
